@@ -18,14 +18,14 @@ jobs:
         key: ${{ secrets.SSH_KEY }}
         port: 22
         script: |
-          # 1. Stop everything
+          # 1. Kill any existing process
           sudo fuser -k 80/tcp || true
           
-          # 2. Setup folder and permissions
+          # 2. Setup folder
           mkdir -p app
           cd app
           
-          # 3. FORCE CREATE main.py (Bypassing Windows encoding issues)
+          # 3. FORCE REWRITE main.py (Fixes Windows formatting bugs)
           echo 'from fastapi import FastAPI' > main.py
           echo 'import uvicorn' >> main.py
           echo 'app = FastAPI()' >> main.py
@@ -45,11 +45,9 @@ jobs:
           
           # 6. Wait and Verify
           echo "Waiting for server to start..."
-          sleep 5
-          
-          # 7. Test Locally (The crucial check)
+          sleep 10
           if curl -v http://127.0.0.1/sayHello; then
-             echo "SUCCESS: Server is responding!"
+             echo "SUCCESS: Server is running!"
           else
              echo "FAILURE: Server crashed. Logs:"
              cat output.log
