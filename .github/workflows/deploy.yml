@@ -1,4 +1,4 @@
-﻿name: Force Repair and Deploy
+﻿name: Final Fix with Dos2Unix
 
 on:
   push:
@@ -6,50 +6,53 @@ on:
       - main
 
 jobs:
-  repair_and_deploy:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Deploy using SSH
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Copy Files
+      uses: appleboy/scp-action@master
+      with:
+        host: ${{ secrets.VM_HOST }}
+        username: ${{ secrets.VM_USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        source: "main.py,requirements.txt"
+        target: "app"
+
+    - name: Fix Formatting and Run
       uses: appleboy/ssh-action@master
       with:
         host: ${{ secrets.VM_HOST }}
         username: ${{ secrets.VM_USERNAME }}
         key: ${{ secrets.SSH_KEY }}
-        port: 22
         script: |
-          # 1. Kill any existing process
+          # 1. Stop old process
           sudo fuser -k 80/tcp || true
-          
-          # 2. Setup folder
-          mkdir -p app
           cd app
           
-          # 3. FORCE REWRITE main.py (Fixes Windows formatting bugs)
-          echo 'from fastapi import FastAPI' > main.py
-          echo 'import uvicorn' >> main.py
-          echo 'app = FastAPI()' >> main.py
-          echo '@app.get("/sayHello")' >> main.py
-          echo 'def say_hello():' >> main.py
-          echo '    return {"message": "Hello User"}' >> main.py
-          echo 'if __name__ == "__main__":' >> main.py
-          echo '    uvicorn.run(app, host="0.0.0.0", port=80)' >> main.py
-          
-          # 4. Install Dependencies
+          # 2. Install tool to fix Windows file endings
           sudo apt-get update
-          sudo apt-get install -y python3-pip
-          sudo pip3 install fastapi uvicorn --break-system-packages
+          sudo apt-get install -y dos2unix python3-pip
           
-          # 5. Start Server
+          # 3. Fix the files (This solves the crash!)
+          dos2unix main.py requirements.txt
+          
+          # 4. Install python libraries
+          sudo pip3 install -r requirements.txt --break-system-packages
+          
+          # 5. Start the app
           nohup sudo python3 main.py > output.log 2>&1 &
           
-          # 6. Wait and Verify
-          echo "Waiting for server to start..."
-          sleep 10
+          # 6. Verify
+          echo "Waiting for start..."
+          sleep 5
           if curl -v http://127.0.0.1/sayHello; then
-             echo "SUCCESS: Server is running!"
+             echo "SUCCESS: App is running!"
           else
-             echo "FAILURE: Server crashed. Logs:"
+             echo "FAIL: App crashed. Logs:"
              cat output.log
              exit 1
           fi
