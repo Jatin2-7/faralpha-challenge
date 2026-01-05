@@ -1,4 +1,4 @@
-﻿name: Deploy and Fix
+﻿name: Force Repair and Deploy
 
 on:
   push:
@@ -6,45 +6,52 @@ on:
       - main
 
 jobs:
-  deploy:
+  repair_and_deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-
-    - name: Deploy
+    - name: Deploy using SSH
       uses: appleboy/ssh-action@master
       with:
         host: ${{ secrets.VM_HOST }}
         username: ${{ secrets.VM_USERNAME }}
         key: ${{ secrets.SSH_KEY }}
+        port: 22
         script: |
-          # 1. Try to Open Firewall (This is likely the issue)
-          sudo ufw allow 80
-          sudo iptables -A INPUT -p tcp --dport 80 -j ACCEPT
-
-          # 2. Go to app folder
+          # 1. Stop everything
+          sudo fuser -k 80/tcp || true
+          
+          # 2. Setup folder and permissions
+          mkdir -p app
           cd app
           
-          # 3. Force install dependencies to be safe
+          # 3. FORCE CREATE main.py (Bypassing Windows encoding issues)
+          echo 'from fastapi import FastAPI' > main.py
+          echo 'import uvicorn' >> main.py
+          echo 'app = FastAPI()' >> main.py
+          echo '@app.get("/sayHello")' >> main.py
+          echo 'def say_hello():' >> main.py
+          echo '    return {"message": "Hello User"}' >> main.py
+          echo 'if __name__ == "__main__":' >> main.py
+          echo '    uvicorn.run(app, host="0.0.0.0", port=80)' >> main.py
+          
+          # 4. Install Dependencies
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
           sudo pip3 install fastapi uvicorn --break-system-packages
-
-          # 4. Kill any existing process
-          sudo fuser -k 80/tcp || true
-
-          # 5. Start App and save logs
+          
+          # 5. Start Server
           nohup sudo python3 main.py > output.log 2>&1 &
           
-          # 6. Wait 5 seconds to ensure it starts
+          # 6. Wait and Verify
+          echo "Waiting for server to start..."
           sleep 5
           
-          # 7. Check if it is actually running
-          if ! pgrep -f "python3 main.py" > /dev/null; then
-            echo "CRASH DETECTED! Here are the error logs:"
-            cat output.log
-            exit 1
+          # 7. Test Locally (The crucial check)
+          if curl -v http://127.0.0.1/sayHello; then
+             echo "SUCCESS: Server is responding!"
           else
-            echo "SUCCESS: App is running. Recent logs:"
-            cat output.log
+             echo "FAILURE: Server crashed. Logs:"
+             cat output.log
+             exit 1
           fi
