@@ -1,4 +1,4 @@
-﻿name: Clean Slate Deployment
+﻿name: Final Venv Fix Port 80
 
 on:
   push:
@@ -18,13 +18,13 @@ jobs:
         key: ${{ secrets.SSH_KEY }}
         port: 22
         script: |
-          # 1. KILL & CLEAN (Delete everything old)
+          # 1. KILL OLD PROCESSES
           sudo fuser -k 80/tcp || true
           rm -rf app
           mkdir app
           cd app
-          
-          # 2. WRITE FRESH FILE (Pure Linux format)
+
+          # 2. WRITE MAIN.PY (STRICTLY PORT 80)
           echo 'from fastapi import FastAPI' > main.py
           echo 'import uvicorn' >> main.py
           echo 'app = FastAPI()' >> main.py
@@ -33,21 +33,27 @@ jobs:
           echo '    return {"message": "Hello User"}' >> main.py
           echo 'if __name__ == "__main__":' >> main.py
           echo '    uvicorn.run(app, host="0.0.0.0", port=80)' >> main.py
-          
-          # 3. INSTALL (Force reinstall dependencies)
+
+          # 3. SETUP VIRTUAL ENV (This fixes the ModuleNotFoundError)
           sudo apt-get update
-          sudo apt-get install -y python3-pip
-          sudo pip3 install fastapi uvicorn --break-system-packages
+          sudo apt-get install -y python3-venv python3-pip
+          # Create the virtual environment
+          python3 -m venv venv
           
-          # 4. START
-          nohup sudo python3 main.py > output.log 2>&1 &
-          
-          # 5. VERIFY
-          echo "Waiting 15 seconds for startup..."
-          sleep 15
+          # 4. INSTALL PACKAGES INTO VENV
+          # We use the venv's pip directly
+          ./venv/bin/pip install fastapi uvicorn
+
+          # 5. START SERVER (sudo is required for Port 80)
+          # We use the venv's python directly with sudo
+          nohup sudo ./venv/bin/python3 main.py > output.log 2>&1 &
+
+          # 6. VERIFY
+          echo "Waiting 10 seconds for startup..."
+          sleep 10
           
           if curl -v http://127.0.0.1/sayHello; then
-             echo "SUCCESS: Server is running!"
+             echo "SUCCESS: Server is running on Port 80!"
              exit 0
           else
              echo "FAILURE: Server crashed. Logs:"
