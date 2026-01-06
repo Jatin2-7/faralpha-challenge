@@ -1,4 +1,4 @@
-﻿name: Final Venv Fix Port 80
+﻿name: Zero Downtime Deployment
 
 on:
   push:
@@ -18,45 +18,54 @@ jobs:
         key: ${{ secrets.SSH_KEY }}
         port: 22
         script: |
-          # 1. KILL OLD PROCESSES
-          sudo fuser -k 80/tcp || true
-          rm -rf app
-          mkdir app
+          # 1. Prepare Folder (Ensure it exists)
+          mkdir -p app
           cd app
 
-          # 2. WRITE MAIN.PY (STRICTLY PORT 80)
-          echo 'from fastapi import FastAPI' > main.py
-          echo 'import uvicorn' >> main.py
-          echo 'app = FastAPI()' >> main.py
-          echo '@app.get("/sayHello")' >> main.py
-          echo 'def say_hello():' >> main.py
-          echo '    return {"message": "Hello User"}' >> main.py
-          echo 'if __name__ == "__main__":' >> main.py
-          echo '    uvicorn.run(app, host="0.0.0.0", port=80)' >> main.py
+          # 2. Update Code Atomically
+          # We write to a temp file first, then move it. This prevents reading a half-written file.
+          echo 'from fastapi import FastAPI' > main.py.tmp
+          echo 'import uvicorn' >> main.py.tmp
+          echo 'app = FastAPI()' >> main.py.tmp
+          echo '@app.get("/sayHello")' >> main.py.tmp
+          echo 'def say_hello():' >> main.py.tmp
+          echo '    return {"message": "Hello User"}' >> main.py.tmp
+          mv main.py.tmp main.py
 
-          # 3. SETUP VIRTUAL ENV (This fixes the ModuleNotFoundError)
+          # 3. Setup Environment & Install Gunicorn
           sudo apt-get update
           sudo apt-get install -y python3-venv python3-pip
-          # Create the virtual environment
-          python3 -m venv venv
+          if [ ! -d "venv" ]; then
+              python3 -m venv venv
+          fi
           
-          # 4. INSTALL PACKAGES INTO VENV
-          # We use the venv's pip directly
-          ./venv/bin/pip install fastapi uvicorn
+          # Install Gunicorn (The tool that allows zero-downtime reloads)
+          sudo ./venv/bin/pip install fastapi uvicorn gunicorn
 
-          # 5. START SERVER (sudo is required for Port 80)
-          # We use the venv's python directly with sudo
-          nohup sudo ./venv/bin/python3 main.py > output.log 2>&1 &
+          # 4. Zero Downtime Logic
+          # We check if Gunicorn is ALREADY running the app
+          PID=$(sudo pgrep -f "gunicorn.*main:app")
 
-          # 6. VERIFY
-          echo "Waiting 10 seconds for startup..."
-          sleep 10
-          
+          if [ -n "$PID" ]; then
+              echo "Server is running (PID: $PID). performing Graceful Reload..."
+              # SIGHUP signal tells Gunicorn to reload code without dropping connections
+              sudo kill -HUP $PID
+          else
+              echo "Gunicorn not running. Cleaning port 80 and starting fresh..."
+              # If the old 'python main.py' is running, we must kill it once to switch to Gunicorn
+              sudo fuser -k 80/tcp || true
+              
+              # Start Gunicorn in Daemon mode (-D) on Port 80
+              sudo ./venv/bin/gunicorn -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:80 -D
+          fi
+
+          # 5. Verification
+          echo "Waiting for health check..."
+          sleep 5
           if curl -v http://127.0.0.1/sayHello; then
-             echo "SUCCESS: Server is running on Port 80!"
+             echo "SUCCESS: App is running gracefully!"
              exit 0
           else
-             echo "FAILURE: Server crashed. Logs:"
-             cat output.log
+             echo "FAILURE: App crashed."
              exit 1
           fi
