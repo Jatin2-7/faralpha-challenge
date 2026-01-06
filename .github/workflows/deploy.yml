@@ -42,8 +42,8 @@ jobs:
           sudo ./venv/bin/pip install fastapi uvicorn gunicorn
 
           # 4. Zero Downtime Logic
-          # We use '-o' to find the OLDEST process (The Master)
-          PID=$(sudo pgrep -o -f "gunicorn.*main:app")
+          # We use "main:ap[p]" regex trick to prevent matching THIS script
+          PID=$(sudo pgrep -o -f "gunicorn.*main:ap[p]")
 
           if [ -n "$PID" ]; then
               echo "Master process found (PID: $PID). Reloading..."
@@ -51,6 +51,7 @@ jobs:
               sudo kill -HUP $PID
           else
               echo "Gunicorn not running. Starting fresh..."
+              # Cleanup port 80 just in case
               sudo fuser -k 80/tcp || true
               
               # Start Gunicorn in Daemon mode
@@ -58,7 +59,7 @@ jobs:
           fi
 
           # 5. Verification
-          echo "Waiting for reload..."
+          echo "Waiting for reload/start..."
           sleep 5
           if curl -v http://127.0.0.1/sayHello; then
              echo "SUCCESS: App is running!"
