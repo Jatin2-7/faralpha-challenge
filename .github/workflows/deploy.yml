@@ -18,12 +18,11 @@ jobs:
         key: ${{ secrets.SSH_KEY }}
         port: 22
         script: |
-          # 1. Prepare Folder (Ensure it exists)
+          # 1. Prepare Folder
           mkdir -p app
           cd app
 
           # 2. Update Code Atomically
-          # We write to a temp file first, then move it. This prevents reading a half-written file.
           echo 'from fastapi import FastAPI' > main.py.tmp
           echo 'import uvicorn' >> main.py.tmp
           echo 'app = FastAPI()' >> main.py.tmp
@@ -32,38 +31,37 @@ jobs:
           echo '    return {"message": "Hello User"}' >> main.py.tmp
           mv main.py.tmp main.py
 
-          # 3. Setup Environment & Install Gunicorn
+          # 3. Setup Environment
           sudo apt-get update
           sudo apt-get install -y python3-venv python3-pip
           if [ ! -d "venv" ]; then
               python3 -m venv venv
           fi
           
-          # Install Gunicorn (The tool that allows zero-downtime reloads)
+          # Install Gunicorn
           sudo ./venv/bin/pip install fastapi uvicorn gunicorn
 
           # 4. Zero Downtime Logic
-          # We check if Gunicorn is ALREADY running the app
-          PID=$(sudo pgrep -f "gunicorn.*main:app")
+          # We use '-o' to find the OLDEST process (The Master)
+          PID=$(sudo pgrep -o -f "gunicorn.*main:app")
 
           if [ -n "$PID" ]; then
-              echo "Server is running (PID: $PID). performing Graceful Reload..."
-              # SIGHUP signal tells Gunicorn to reload code without dropping connections
+              echo "Master process found (PID: $PID). Reloading..."
+              # SIGHUP signal reloads the master gracefully
               sudo kill -HUP $PID
           else
-              echo "Gunicorn not running. Cleaning port 80 and starting fresh..."
-              # If the old 'python main.py' is running, we must kill it once to switch to Gunicorn
+              echo "Gunicorn not running. Starting fresh..."
               sudo fuser -k 80/tcp || true
               
-              # Start Gunicorn in Daemon mode (-D) on Port 80
+              # Start Gunicorn in Daemon mode
               sudo ./venv/bin/gunicorn -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:80 -D
           fi
 
           # 5. Verification
-          echo "Waiting for health check..."
+          echo "Waiting for reload..."
           sleep 5
           if curl -v http://127.0.0.1/sayHello; then
-             echo "SUCCESS: App is running gracefully!"
+             echo "SUCCESS: App is running!"
              exit 0
           else
              echo "FAILURE: App crashed."
