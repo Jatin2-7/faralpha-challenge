@@ -33,7 +33,8 @@ jobs:
 
           # 3. Setup Environment
           sudo apt-get update
-          sudo apt-get install -y python3-venv python3-pip
+          # Install lsof to safely find the process on Port 80
+          sudo apt-get install -y python3-venv python3-pip lsof
           if [ ! -d "venv" ]; then
               python3 -m venv venv
           fi
@@ -41,17 +42,18 @@ jobs:
           # Install Gunicorn
           sudo ./venv/bin/pip install fastapi uvicorn gunicorn
 
-          # 4. Zero Downtime Logic
-          # We use "main:ap[p]" regex trick to prevent matching THIS script
-          PID=$(sudo pgrep -o -f "gunicorn.*main:ap[p]")
+          # 4. Zero Downtime Logic (The Robust Fix)
+          # "lsof" finds the exact PID listening on Port 80. 
+          # It ignores the script, workers, and everything else.
+          PID=$(sudo lsof -t -i:80 -sTCP:LISTEN)
 
           if [ -n "$PID" ]; then
-              echo "Master process found (PID: $PID). Reloading..."
-              # SIGHUP signal reloads the master gracefully
+              echo "Gunicorn Master found listening on Port 80 (PID: $PID). Sending Reload Signal..."
+              # SIGHUP tells the master to reload the code with zero downtime
               sudo kill -HUP $PID
           else
-              echo "Gunicorn not running. Starting fresh..."
-              # Cleanup port 80 just in case
+              echo "No process found on Port 80. Starting fresh..."
+              # Cleanup just in case
               sudo fuser -k 80/tcp || true
               
               # Start Gunicorn in Daemon mode
@@ -59,7 +61,7 @@ jobs:
           fi
 
           # 5. Verification
-          echo "Waiting for reload/start..."
+          echo "Waiting for reload..."
           sleep 5
           if curl -v http://127.0.0.1/sayHello; then
              echo "SUCCESS: App is running!"
